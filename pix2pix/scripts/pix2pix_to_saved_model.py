@@ -14,14 +14,18 @@ import math
 import time
 
 parser = argparse.ArgumentParser()
+
 parser.add_argument("--output_dir", required=True, help="where to put output files")
+
 parser.add_argument("--seed", type=int)
+
 parser.add_argument(
     "--separable_conv",
     default=False,
     action="store_true",
     help="use separable convolutions in the generator",
 )
+
 parser.add_argument(
     "--checkpoint",
     default=None,
@@ -29,56 +33,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--which_direction", type=str, default="AtoB", choices=["AtoB", "BtoA"]
-)
-parser.add_argument(
     "--ngf",
     type=int,
     default=64,
     help="number of generator filters in first conv layer",
 )
-parser.add_argument(
-    "--ndf",
-    type=int,
-    default=64,
-    help="number of discriminator filters in first conv layer",
-)
-parser.add_argument(
-    "--scale_size",
-    type=int,
-    default=286,
-    help="scale images to this size before cropping to 256x256",
-)
-parser.add_argument(
-    "--flip", dest="flip", action="store_true", help="flip images horizontally"
-)
-parser.add_argument(
-    "--no_flip",
-    dest="flip",
-    action="store_false",
-    help="don't flip images horizontally",
-)
-parser.set_defaults(flip=True)
-parser.add_argument(
-    "--lr", type=float, default=0.0002, help="initial learning rate for adam"
-)
-parser.add_argument("--beta1", type=float, default=0.5, help="momentum term of adam")
-parser.add_argument(
-    "--l1_weight",
-    type=float,
-    default=100.0,
-    help="weight on L1 term for generator gradient",
-)
-parser.add_argument(
-    "--gan_weight",
-    type=float,
-    default=1.0,
-    help="weight on GAN term for generator gradient",
-)
 
-# export options
-parser.add_argument("--output_filetype", default="png", choices=["png", "jpeg"])
-a = parser.parse_args()
+args = parser.parse_args()
 
 EPS = 1e-12
 CROP_SIZE = 256
@@ -88,7 +49,8 @@ Examples = collections.namedtuple(
 )
 Model = collections.namedtuple(
     "Model",
-    "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train",
+    "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, "
+    + "gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train",
 )
 
 
@@ -136,7 +98,7 @@ def discrim_conv(batch_input, out_channels, stride):
 def gen_conv(batch_input, out_channels):
     # [batch, in_height, in_width, in_channels] => [batch, out_height, out_width, out_channels]
     initializer = tf.random_normal_initializer(0, 0.02)
-    if a.separable_conv:
+    if args.separable_conv:
         return tf.layers.separable_conv2d(
             batch_input,
             out_channels,
@@ -160,7 +122,7 @@ def gen_conv(batch_input, out_channels):
 def gen_deconv(batch_input, out_channels):
     # [batch, in_height, in_width, in_channels] => [batch, out_height, out_width, out_channels]
     initializer = tf.random_normal_initializer(0, 0.02)
-    if a.separable_conv:
+    if args.separable_conv:
         _b, h, w, _c = batch_input.shape
         resized_input = tf.image.resize_images(
             batch_input, [h * 2, w * 2], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR
@@ -288,17 +250,17 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
     # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
     with tf.variable_scope("encoder_1"):
-        output = gen_conv(generator_inputs, a.ngf)
+        output = gen_conv(generator_inputs, args.ngf)
         layers.append(output)
 
     layer_specs = [
-        a.ngf * 2,  # encoder_2: [batch, 128, 128, ngf] => [batch, 64, 64, ngf * 2]
-        a.ngf * 4,  # encoder_3: [batch, 64, 64, ngf * 2] => [batch, 32, 32, ngf * 4]
-        a.ngf * 8,  # encoder_4: [batch, 32, 32, ngf * 4] => [batch, 16, 16, ngf * 8]
-        a.ngf * 8,  # encoder_5: [batch, 16, 16, ngf * 8] => [batch, 8, 8, ngf * 8]
-        a.ngf * 8,  # encoder_6: [batch, 8, 8, ngf * 8] => [batch, 4, 4, ngf * 8]
-        a.ngf * 8,  # encoder_7: [batch, 4, 4, ngf * 8] => [batch, 2, 2, ngf * 8]
-        a.ngf * 8,  # encoder_8: [batch, 2, 2, ngf * 8] => [batch, 1, 1, ngf * 8]
+        args.ngf * 2,  # encoder_2: [batch, 128, 128, ngf] => [batch, 64, 64, ngf * 2]
+        args.ngf * 4,  # encoder_3: [batch, 64, 64, ngf * 2] => [batch, 32, 32, ngf * 4]
+        args.ngf * 8,  # encoder_4: [batch, 32, 32, ngf * 4] => [batch, 16, 16, ngf * 8]
+        args.ngf * 8,  # encoder_5: [batch, 16, 16, ngf * 8] => [batch, 8, 8, ngf * 8]
+        args.ngf * 8,  # encoder_6: [batch, 8, 8, ngf * 8] => [batch, 4, 4, ngf * 8]
+        args.ngf * 8,  # encoder_7: [batch, 4, 4, ngf * 8] => [batch, 2, 2, ngf * 8]
+        args.ngf * 8,  # encoder_8: [batch, 2, 2, ngf * 8] => [batch, 1, 1, ngf * 8]
     ]
 
     for out_channels in layer_specs:
@@ -311,31 +273,31 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
     layer_specs = [
         (
-            a.ngf * 8,
+            args.ngf * 8,
             0.5,
         ),  # decoder_8: [batch, 1, 1, ngf * 8] => [batch, 2, 2, ngf * 8 * 2]
         (
-            a.ngf * 8,
+            args.ngf * 8,
             0.5,
         ),  # decoder_7: [batch, 2, 2, ngf * 8 * 2] => [batch, 4, 4, ngf * 8 * 2]
         (
-            a.ngf * 8,
+            args.ngf * 8,
             0.5,
         ),  # decoder_6: [batch, 4, 4, ngf * 8 * 2] => [batch, 8, 8, ngf * 8 * 2]
         (
-            a.ngf * 8,
+            args.ngf * 8,
             0.0,
         ),  # decoder_5: [batch, 8, 8, ngf * 8 * 2] => [batch, 16, 16, ngf * 8 * 2]
         (
-            a.ngf * 4,
+            args.ngf * 4,
             0.0,
         ),  # decoder_4: [batch, 16, 16, ngf * 8 * 2] => [batch, 32, 32, ngf * 4 * 2]
         (
-            a.ngf * 2,
+            args.ngf * 2,
             0.0,
         ),  # decoder_3: [batch, 32, 32, ngf * 4 * 2] => [batch, 64, 64, ngf * 2 * 2]
         (
-            a.ngf,
+            args.ngf,
             0.0,
         ),  # decoder_2: [batch, 64, 64, ngf * 2 * 2] => [batch, 128, 128, ngf * 2]
     ]
@@ -347,11 +309,11 @@ def create_generator(generator_inputs, generator_outputs_channels):
             if decoder_layer == 0:
                 # first decoder layer doesn't have skip connections
                 # since it is directly connected to the skip_layer
-                input = layers[-1]
+                input_tensor = layers[-1]
             else:
-                input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
+                input_tensor = tf.concat([layers[-1], layers[skip_layer]], axis=3)
 
-            rectified = tf.nn.relu(input)
+            rectified = tf.nn.relu(input_tensor)
             # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
             output = gen_deconv(rectified, out_channels)
             output = batchnorm(output)
@@ -363,8 +325,8 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
     # decoder_1: [batch, 128, 128, ngf * 2] => [batch, 256, 256, generator_outputs_channels]
     with tf.variable_scope("decoder_1"):
-        input = tf.concat([layers[-1], layers[0]], axis=3)
-        rectified = tf.nn.relu(input)
+        input_tensor = tf.concat([layers[-1], layers[0]], axis=3)
+        rectified = tf.nn.relu(input_tensor)
         output = gen_deconv(rectified, generator_outputs_channels)
         output = tf.tanh(output)
         layers.append(output)
@@ -373,101 +335,63 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
 
 def main():
-    if a.seed is None:
-        a.seed = random.randint(0, 2 ** 31 - 1)
+    if args.seed is None:
+        args.seed = random.randint(0, 2 ** 31 - 1)
 
-    tf.set_random_seed(a.seed)
-    np.random.seed(a.seed)
-    random.seed(a.seed)
+    tf.set_random_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
 
-    if not os.path.exists(a.output_dir):
-        os.makedirs(a.output_dir)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
-    if a.checkpoint is None:
-        raise Exception("checkpoint required for test mode")
+    if args.checkpoint is None:
+        raise Exception("Please provide the checkpoint directory.")
 
     # load some options from the checkpoint
-    options = {"which_direction", "ngf", "ndf", "lab_colorization"}
-    with open(os.path.join(a.checkpoint, "options.json")) as f:
+    options = {"ngf"}
+    with open(os.path.join(args.checkpoint, "options.json")) as f:
         for key, val in json.loads(f.read()).items():
             if key in options:
-                print("loaded", key, "=", val)
-                setattr(a, key, val)
-    # disable these features in test mode
-    a.scale_size = CROP_SIZE
-    a.flip = False
+                setattr(args, key, val)
 
-    for k, v in a._get_kwargs():
-        print(k, "=", v)
-
-    # with open(os.path.join(a.output_dir, "options.json"), "w") as f:
-    #     f.write(json.dumps(vars(a), sort_keys=True, indent=4))
-
-    # export the generator to a meta graph that can be imported later for standalone generation
-    if a.lab_colorization:
-        raise Exception("export not supported for lab_colorization")
-
-    input = tf.placeholder(tf.string, shape=[1])
-    input_data = tf.decode_base64(input[0])
-    input_image = tf.image.decode_png(input_data)
-
-    # remove alpha channel if present
-    input_image = tf.cond(
-        tf.equal(tf.shape(input_image)[2], 4),
-        lambda: input_image[:, :, :3],
-        lambda: input_image,
-    )
-    # convert grayscale to RGB
-    input_image = tf.cond(
-        tf.equal(tf.shape(input_image)[2], 1),
-        lambda: tf.image.grayscale_to_rgb(input_image),
-        lambda: input_image,
-    )
-
-    input_image = tf.image.convert_image_dtype(input_image, dtype=tf.float32)
-    input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
-    batch_input = tf.expand_dims(input_image, axis=0)
+    input_tensor = tf.placeholder(tf.float32, shape=[CROP_SIZE, CROP_SIZE, 3])
+    batch_input = tf.expand_dims(input_tensor, axis=0)
 
     with tf.variable_scope("generator"):
-        batch_output = deprocess(create_generator(preprocess(batch_input), 3))
-
-    output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
-    if a.output_filetype == "png":
-        output_data = tf.image.encode_png(output_image)
-    elif a.output_filetype == "jpeg":
-        output_data = tf.image.encode_jpeg(output_image, quality=80)
-    else:
-        raise Exception("invalid filetype")
-    output = tf.convert_to_tensor([tf.encode_base64(output_data)])
+        output = deprocess(create_generator(preprocess(batch_input), 3))
 
     key = tf.placeholder(tf.string, shape=[1])
-    inputs = {"key": key.name, "input": input.name}
-    tf.add_to_collection("inputs", json.dumps(inputs))
-    outputs = {"key": tf.identity(key).name, "output": output.name}
-    tf.add_to_collection("outputs", json.dumps(outputs))
-
+    inputs = {
+        "key": tf.saved_model.utils.build_tensor_info(key),
+        "input": tf.saved_model.utils.build_tensor_info(input_tensor),
+    }
+    outputs = {
+        "key": tf.saved_model.utils.build_tensor_info(tf.identity(key)),
+        "output": tf.saved_model.utils.build_tensor_info(output),
+    }
+    signature = tf.saved_model.signature_def_utils.build_signature_def(
+        inputs=inputs,
+        outputs=outputs,
+        method_name=tf.saved_model.signature_constants.PREDICT_METHOD_NAME,
+    )
     init_op = tf.global_variables_initializer()
     restore_saver = tf.train.Saver()
-    # export_saver = tf.train.Saver()
-    builder = tf.saved_model.builder.SavedModelBuilder(a.output_dir)
+    builder = tf.saved_model.builder.SavedModelBuilder(args.output_dir)
+
     with tf.Session() as sess:
         sess.run(init_op)
-        print("loading model from checkpoint")
-        checkpoint = tf.train.latest_checkpoint(a.checkpoint)
+        checkpoint = tf.train.latest_checkpoint(args.checkpoint)
         restore_saver.restore(sess, checkpoint)
-        print("exporting model")
         builder.add_meta_graph_and_variables(
-            sess, [tf.saved_model.SERVING], strip_default_attrs=True
+            sess,
+            [tf.saved_model.tag_constants.SERVING],
+            signature_def_map={
+                tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: signature
+            },
+            strip_default_attrs=True,
         )
         builder.save()
-        # tf.saved_model.simple_save(sess, a.output_dir, inputs=inputs, outputs=outputs)
-        # export_saver.export_meta_graph(
-        #     filename=os.path.join(a.output_dir, "export.meta")
-        # )
-        # export_saver.save(
-        #     sess, os.path.join(a.output_dir, "export"), write_meta_graph=False
-        # )
-    return
 
 
 main()
