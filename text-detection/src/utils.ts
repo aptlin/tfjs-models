@@ -21,7 +21,7 @@ import {config} from './config';
 import {Point} from './geometry';
 import {minAreaRect} from './minAreaRect';
 import {progressiveScaleExpansion} from './progressiveScaleExpansion';
-import {Box, QuantizationBytes, TextDetectionInput} from './types';
+import {Box, QuantizationBytes, TextDetectionInput, TextDetectionOptions} from './types';
 
 export const getURL = (quantizationBytes: QuantizationBytes) => {
   return `${config['BASE_PATH']}/${
@@ -31,40 +31,96 @@ export const getURL = (quantizationBytes: QuantizationBytes) => {
 
 export const detect =
     (kernelScores: tf.Tensor3D, originalHeight: number, originalWidth: number,
-     minKernelArea = config['MIN_KERNEL_AREA'], minScore = config['MIN_SCORE'],
-     maxSideLength = config['MAX_SIDE_LENGTH']): Box[] => {
+     textDetectionOptions: TextDetectionOptions = {
+       minKernelArea: config['MIN_KERNEL_AREA'],
+       minScore: config['MIN_SCORE'],
+       maxSideLength: config['MAX_SIDE_LENGTH']
+     }): Box[] => {
+      if (!textDetectionOptions.minKernelArea) {
+        textDetectionOptions.minKernelArea = config['MIN_KERNEL_AREA'];
+      }
+      if (!textDetectionOptions.minScore) {
+        textDetectionOptions.minScore = config['MIN_SCORE'];
+      }
+      if (!textDetectionOptions.maxSideLength) {
+        textDetectionOptions.maxSideLength = config['MAX_SIDE_LENGTH'];
+      }
+      const {minKernelArea, minScore, maxSideLength} = textDetectionOptions;
+
       const [height, width, numOfKernels] = kernelScores.shape;
       const kernelScoreData = kernelScores.arraySync();
       tf.dispose(kernelScores);
-      const one = tf.ones([height, width], 'int32');
-      const zero = tf.zeros([height, width], 'int32');
-      const threshold = tf.fill([height, width], minScore);
+
       const kernels = new Array<tf.Tensor2D>();
-      for (let kernelIdx = numOfKernels - 1; kernelIdx > -1; --kernelIdx) {
-        const kernelScoreBuffer = tf.buffer([height, width], 'int32');
+
+      for (let kernelIdx = 0; kernelIdx < numOfKernels; ++kernelIdx) {
+        const kernelBuffer = tf.buffer([height, width], 'float32');
+
         for (let rowIdx = 0; rowIdx < height; ++rowIdx) {
           for (let columnIdx = 0; columnIdx < width; ++columnIdx) {
-            kernelScoreBuffer.set(
+            kernelBuffer.set(
                 kernelScoreData[rowIdx][columnIdx][kernelIdx], rowIdx,
                 columnIdx);
           }
         }
-        const kernelScore = kernelScoreBuffer.toTensor();
+        const kernelRawTensor = kernelBuffer.toTensor();
         const kernel = tf.tidy(
-            () => tf.where(kernelScore.greater(threshold), one, zero) as
-                tf.Tensor2D);
-        kernels.push(kernel);
-        tf.dispose(kernelScore);
+            () => (((kernelRawTensor.sub(tf.scalar(1))).sign()).add(1))
+                      .div(tf.scalar(2)));
+        tf.dispose(kernelRawTensor);
+        kernels.push(kernel as tf.Tensor2D);
       }
-      tf.dispose(one);
-      tf.dispose(zero);
-      tf.dispose(threshold);
-      const [heightScalingFactor, widthScalingFactor] =
-          computeScalingFactors(originalHeight, originalWidth, maxSideLength);
+
       if (kernels.length > 0) {
+        const scoreBuffer = tf.buffer([height, width], 'float32');
+        for (let rowIdx = 0; rowIdx < height; ++rowIdx) {
+          for (let columnIdx = 0; columnIdx < width; ++columnIdx) {
+            scoreBuffer.set(
+                kernelScoreData[rowIdx][columnIdx][0], rowIdx, columnIdx);
+          }
+        }
+        const scoreRawTensor = scoreBuffer.toTensor();
+        const score = scoreRawTensor.sigmoid();
+        const scoreData = score.arraySync() as number[][];
+        tf.dispose([scoreRawTensor, score]);
+
+        const text = kernels[0].clone();
+
+        for (let kernelIdx = 0; kernelIdx < numOfKernels; ++kernelIdx) {
+          const kernel = kernels[kernelIdx];
+          kernels[kernelIdx] = kernel.mulStrict(text);
+          tf.dispose(kernel);
+        }
+
+        tf.dispose(text);
+
+        const [heightScalingFactor, widthScalingFactor] =
+            computeScalingFactors(originalHeight, originalWidth, maxSideLength);
         const {segmentationMapBuffer, recognizedLabels} =
             progressiveScaleExpansion(kernels, minKernelArea);
         tf.dispose(kernels);
+        if (recognizedLabels.size === 0) {
+          return [];
+        }
+        const labelScores:
+            {[label: number]: {count: number, totalScore: number}} = {};
+        for (let rowIdx = 0; rowIdx < height; ++rowIdx) {
+          for (let columnIdx = 0; columnIdx < width; ++columnIdx) {
+            const label = segmentationMapBuffer.get(rowIdx, columnIdx);
+            if (recognizedLabels.has(label)) {
+              const score = scoreData[rowIdx][columnIdx];
+              if (!labelScores[label]) {
+                labelScores[label] = {count: 1, totalScore: score};
+              }
+
+              const {count, totalScore} = labelScores[label];
+              labelScores[label] = {
+                count: count + 1,
+                totalScore: totalScore + score
+              };
+            }
+          }
+        }
         const targetHeight = Math.round(originalHeight * heightScalingFactor);
         const targetWidth = Math.round(originalWidth * widthScalingFactor);
         const resizedSegmentationMap = tf.tidy(() => {
@@ -78,18 +134,19 @@ export const detect =
         const resizedSegmentationMapData =
             resizedSegmentationMap.arraySync() as number[][];
         tf.dispose(resizedSegmentationMap);
-        if (recognizedLabels.size === 0) {
-          return [];
-        }
+
         const points: {[label: number]: Point[]} = {};
         for (let rowIdx = 0; rowIdx < targetHeight; ++rowIdx) {
           for (let columnIdx = 0; columnIdx < targetWidth; ++columnIdx) {
             const label = resizedSegmentationMapData[rowIdx][columnIdx];
             if (recognizedLabels.has(label)) {
-              if (!points[label]) {
-                points[label] = [];
+              const {totalScore, count} = labelScores[label];
+              if (totalScore / count >= minScore) {
+                if (!points[label]) {
+                  points[label] = [];
+                }
+                points[label].push(new Point(columnIdx, rowIdx));
               }
-              points[label].push(new Point(columnIdx, rowIdx));
             }
           }
         }
@@ -108,6 +165,8 @@ export const detect =
           boxes.push(box);
         });
         return boxes;
+      } else {
+        tf.dispose(kernels);
       }
       return [];
     };
